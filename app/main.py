@@ -28,6 +28,10 @@ all_origins = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://iasblog.ieeeuwu.org",
+    "http://iasblog.ieeeuwu.org",
+    "https://www.iasblog.ieeeuwu.org",
+    "http://www.iasblog.ieeeuwu.org",
 ]
 
 # Add environment-based origins if set
@@ -46,7 +50,7 @@ logger.info(f"CORS allowed origins: {all_origins}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=all_origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"https?://((localhost|127\.0\.0\.1)(:\d+)?|([a-zA-Z0-9-]+\.)?iasblog\.ieeeuwu\.org)$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=["*"],
