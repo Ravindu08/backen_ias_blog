@@ -11,6 +11,7 @@ from datetime import datetime
 import re
 import logging
 import html
+from urllib.parse import urlparse
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -88,11 +89,78 @@ def calculate_reading_time(content: str) -> str:
     return f"{minutes} min read"
 
 
-def get_public_frontend_base() -> str:
-        """Pick the first configured frontend URL as canonical public base."""
-        frontend = settings.frontend_url or "http://localhost:5173"
-        first = frontend.split(",")[0].strip() if frontend else "http://localhost:5173"
-        return first.rstrip("/")
+def normalize_featured_image_url(image_url: str | None, request: Request) -> str | None:
+    """Rewrite localhost upload URLs to the current backend host for deployed clients."""
+    if not image_url:
+        return image_url
+
+    value = str(image_url).strip()
+    if not value:
+        return value
+
+    local_prefixes = (
+        "http://127.0.0.1:8000/uploads/",
+        "http://localhost:8000/uploads/",
+        "https://127.0.0.1:8000/uploads/",
+        "https://localhost:8000/uploads/",
+    )
+
+    if value.startswith("/uploads/"):
+        return f"{str(request.base_url).rstrip('/')}{value}"
+
+    for prefix in local_prefixes:
+        if value.startswith(prefix):
+            filename = value.split("/uploads/", 1)[1]
+            return f"{str(request.base_url).rstrip('/')}/uploads/{filename}"
+
+    return value
+
+
+def _ensure_absolute_url(value: str, default_scheme: str = "https") -> str:
+    """Ensure configured URL strings are absolute and normalized."""
+    raw = (value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if not re.match(r"^https?://", raw, flags=re.IGNORECASE):
+        raw = f"{default_scheme}://{raw}"
+    return raw
+
+
+def _is_local_or_private_host(hostname: str) -> bool:
+    """Detect non-public hosts that should not be used for social share redirects."""
+    host = (hostname or "").lower()
+    return (
+        host in {"localhost", "127.0.0.1", "0.0.0.0"}
+        or host.startswith("10.")
+        or host.startswith("192.168.")
+        or bool(re.match(r"^172\.(1[6-9]|2\d|3[0-1])\.", host))
+    )
+
+
+def get_public_frontend_base(request: Request) -> str:
+    """Pick a public frontend base URL and avoid localhost/private values in production shares."""
+    frontend = settings.frontend_url or "http://localhost:5173"
+    first = frontend.split(",")[0].strip() if frontend else "http://localhost:5173"
+    normalized = _ensure_absolute_url(first)
+
+    parsed = urlparse(normalized)
+    if parsed.hostname and not _is_local_or_private_host(parsed.hostname):
+        return normalized
+
+    request_base = str(request.base_url).rstrip("/")
+    parsed_request = urlparse(request_base)
+    if parsed_request.hostname and _is_local_or_private_host(parsed_request.hostname):
+        return ""
+    return request_base
+
+
+def get_public_request_url(request: Request) -> str:
+    """Build a public-facing absolute URL from proxy-aware headers when available."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_proto and forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}{request.url.path}"
+    return str(request.url)
 
 
 @router.get("/share/{slug}", response_class=HTMLResponse)
@@ -128,11 +196,14 @@ async def article_share_preview(slug: str, request: Request):
         image_url_raw = raw_image_url
     image_url = html.escape(image_url_raw)
 
-    frontend_base = get_public_frontend_base()
-    canonical_article_url = f"{frontend_base}/article/{slug}"
+    frontend_base = get_public_frontend_base(request)
+    canonical_article_url = f"{frontend_base}/article/{slug}" if frontend_base else ""
 
-    # This endpoint URL is what Facebook scrapes for OG tags.
-    share_url = str(request.url)
+    # Prefer the canonical article URL so scrapers do not lock onto localhost URLs.
+    share_url = html.escape(canonical_article_url or _ensure_absolute_url(get_public_request_url(request)))
+    redirect_meta = f'<meta http-equiv="refresh" content="0;url={canonical_article_url}" />' if canonical_article_url else ""
+    redirect_script = f"<script>window.location.replace({canonical_article_url!r});</script>" if canonical_article_url else ""
+    read_link = f'<p><a href="{canonical_article_url}">Continue to article</a></p>' if canonical_article_url else ""
     html_page = f"""
 <!doctype html>
 <html lang=\"en\">
@@ -147,15 +218,19 @@ async def article_share_preview(slug: str, request: Request):
         <meta property=\"og:url\" content=\"{share_url}\" />
         <meta property=\"og:image\" content=\"{image_url}\" />
         <meta property=\"og:image:secure_url\" content=\"{image_url}\" />
+        <meta name=\"description\" content=\"{description}\" />
         <meta name=\"twitter:card\" content=\"summary_large_image\" />
         <meta name=\"twitter:title\" content=\"{title}\" />
         <meta name=\"twitter:description\" content=\"{description}\" />
         <meta name=\"twitter:image\" content=\"{image_url}\" />
-        <meta http-equiv=\"refresh\" content=\"0;url={canonical_article_url}\" />
+        {redirect_meta}
     </head>
     <body>
+        <h1>{title}</h1>
+        <p>{description}</p>
+        {read_link}
         <p>Redirecting to article...</p>
-        <script>window.location.replace({canonical_article_url!r});</script>
+        {redirect_script}
     </body>
 </html>
 """
@@ -163,6 +238,7 @@ async def article_share_preview(slug: str, request: Request):
 
 @router.get("/", response_model=dict)
 async def list_articles(
+    request: Request,
     category: Optional[str] = Query(default=None),
     featured: Optional[bool] = Query(default=None),
     status: Optional[str] = Query(default="approved"),  # Default show only approved
@@ -182,18 +258,22 @@ async def list_articles(
     cursor = COLLECTION().find(filt).skip(skip).limit(limit).sort("created_at", -1)
     items = [serialize(doc) async for doc in cursor]
     items = await enrich_articles_with_author_profile(items, db)
+    for item in items:
+        item["featuredImage"] = normalize_featured_image_url(item.get("featuredImage"), request)
     return {"items": items, "count": len(items)}
 
 
 @router.get("/{slug}")
-async def get_article(slug: str):
+async def get_article(slug: str, request: Request):
     db = get_db()
     doc = await COLLECTION().find_one({"slug": slug})
     if not doc:
         raise HTTPException(status_code=404, detail="Article not found")
     serialized = serialize(doc)
     enriched = await enrich_articles_with_author_profile([serialized], db)
-    return enriched[0] if enriched else serialized
+    item = enriched[0] if enriched else serialized
+    item["featuredImage"] = normalize_featured_image_url(item.get("featuredImage"), request)
+    return item
 
 
 @router.post("/", response_model=ArticleOut, status_code=201)
