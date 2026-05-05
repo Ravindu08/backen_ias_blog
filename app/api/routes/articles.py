@@ -203,7 +203,6 @@ async def article_share_preview(slug: str, request: Request):
     share_url = html.escape(canonical_article_url or _ensure_absolute_url(get_public_request_url(request)))
     redirect_meta = f'<meta http-equiv="refresh" content="0;url={canonical_article_url}" />' if canonical_article_url else ""
     redirect_script = f"<script>window.location.replace({canonical_article_url!r});</script>" if canonical_article_url else ""
-    read_link = f'<p><a href="{canonical_article_url}">Continue to article</a></p>' if canonical_article_url else ""
     html_page = f"""
 <!doctype html>
 <html lang=\"en\">
@@ -228,8 +227,8 @@ async def article_share_preview(slug: str, request: Request):
     <body>
         <h1>{title}</h1>
         <p>{description}</p>
-        {read_link}
-        <p>Redirecting to article...</p>
+        <p><a href="{canonical_article_url}">Open article</a></p>
+        <p>Opening article...</p>
         {redirect_script}
     </body>
 </html>

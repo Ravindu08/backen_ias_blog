@@ -19,7 +19,7 @@ class Settings(BaseModel):
     jwt_refresh_secret: str | None = os.getenv("JWT_REFRESH_SECRET")
 
     # Frontend / CORS
-    frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    frontend_url: str = os.getenv("FRONTEND_URL", "https://iasblog.ieeeuwu.org")
 
     # Third-party services
     google_client_id: str | None = os.getenv("GOOGLE_CLIENT_ID")

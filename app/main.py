@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
@@ -12,6 +12,7 @@ from app.api.routes.uploads import router as uploads_router
 from app.api.routes.metrics import router as metrics_router
 from app.api.routes.google_auth import router as google_auth_router
 from app.api.routes.engagement import router as engagement_router
+from app.api.routes.articles import article_share_preview
 from app.db.mongo import connect_to_mongo, close_mongo_connection, get_db
 import os
 import cloudinary
@@ -103,6 +104,11 @@ app.include_router(admin_router, prefix="/admin", tags=["admin"])
 app.include_router(uploads_router, prefix="/upload", tags=["upload"])
 app.include_router(metrics_router, prefix="", tags=["metrics"])  # public metrics at /metrics
 app.include_router(engagement_router, prefix="/articles", tags=["engagement"])  # likes/views at /articles/{slug}/like
+
+
+@app.get("/share/{slug}", include_in_schema=False)
+async def share_alias(slug: str, request: Request):
+    return await article_share_preview(slug, request)
 
 # Serve uploaded files
 UPLOADS_PATH = os.path.join(os.getcwd(), "uploads")
